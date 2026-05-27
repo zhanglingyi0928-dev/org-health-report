@@ -826,45 +826,9 @@ function closeMetricModal() {
   editDim=null; editIdx=null; window._tempGrade=null; window._tempJudgment=null;
 }
 
-// =============================================================// ============================================================================
-// AI REPORT — Real AI-powered analysis via internal platform
 // ============================================================================
-const SKILL_DOC = `你是组织健康度诊断分析师，专门为游戏行业的HRBP生成季度组织健康度诊断报告。
-
-## 评估框架与标准
-
-维度1-目标对齐(参考性)：目标拆解落地率 ≥90%优秀 70-90%正常 50-70%警示 <50%危险 | 绩效填写率 ≥95%优秀 85-95%正常 70-85%警示 <70%危险
-维度2-组织结构：管理人员占比 <10%优秀 10-15%正常 15-20%警示 >20%危险 | 管理幅度适配率 ≥85%优秀 70-85%正常 50-70%警示 <50%危险 | 岗位配比 1:0.1优秀 1:0.1-0.2正常 1:0.2-0.3警示 >1:0.3危险
-维度3-人才密度：核心人才占比 25-40%优秀 15-25%或40-50%正常 10-15%或50-60%警示 <10%或>60%危险 | 培养覆盖率 ≥80%优秀 60-80%正常 40-60%警示 <40%危险 | 关键岗位继任率 ≥70%优秀 50-70%正常 30-50%警示 <30%危险
-维度4-组织稳定性：整体离职率(季度) <3%优秀 3-8%正常 8-12%警示 >12%危险 | 核心人才离职率 <1%优秀 1-3%正常 3-5%警示 >5%危险 | 内部晋升vs外部招聘 >2:1优秀 1:1-2:1正常 0.5:1-1:1警示 <0.5:1危险 | 加班负荷度 <110%优秀 110-125%正常 125-140%警示 >140%危险 | 超长工作日占比 <5%优秀 5-15%正常 15-25%警示 >25%危险
-
-## 报告输出格式（严格遵循）
-
-请严格按以下结构输出完整报告。每个部分用 ## 二级标题开头，子部分用 ### 三级标题。
-
-## 一、核心结论摘要
-### 1.1 最需关注的问题（表格格式，每行：|P0/P1/P2 | 问题 | 原因 | 风险等级|）
-### 1.2 当前积极信号（表格格式，每行：| 信号 | 说明 |）
-### 1.3 优先级待办（分为P0/P1/P2三个小节，每项用-开头）
-
-## 二、分维度详细分析
-每个维度用###开头，内嵌每个指标的详细分析：
-- 结果判定：数值+评级
-- 数据解读：计算过程+含义+行业对比+隐含信号
-- 可能原因：2-4种
-- 建议动作：P0/P1/P2
-
-## 三、跨指标综合洞察
-至少2-3个洞察，每个包含：涉及指标 | 原因 | 业务影响 | 建议
-
-## 四、行动清单
-P0/P1/P2三级，用-列表
-
-## 五、附录
-数据来源、需核实信息`;
-
-const AI_API_URL = '/v1/chat/completions';
-const AI_MODEL = 'deepseek-v4-pro';
+// AI REPORT — Local rule-based analysis (no API needed, works everywhere)
+// ============================================================================
 
 function renderAI(rep, ov) {
   const container = document.getElementById('aiReportContent');
@@ -873,23 +837,8 @@ function renderAI(rep, ov) {
     container.innerHTML = `<div class="p-10 text-center text-slate-400"><div class="text-3xl mb-2">🤖</div><p class="font-medium">请先录入指标数据</p><p class="text-sm mt-1">录入数据后将自动生成报告解读</p></div>`;
     return;
   }
-  // Default: always render local rule-based analysis (works everywhere, no API needed)
-  var localHtml = buildLocalAnalysisHTML(rep, ov);
-
-  // Add AI deep analysis button at top (only if API may be available)
-  var aiBtn = `<div class="mb-4 p-3 bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl border border-purple-100">
-    <div class="flex items-center justify-between">
-      <div>
-        <div class="text-sm font-semibold text-slate-700">📊 本地规则分析 <span class="text-xs font-normal text-slate-400">（离线可用）</span></div>
-        <div class="text-xs text-slate-400 mt-0.5">基于预设评估规则自动生成，无需网络</div>
-      </div>
-      <button onclick="generateAIReport()" class="bg-gradient-to-r from-purple-500 to-blue-500 text-white px-4 py-2 rounded-xl text-xs font-medium hover:from-purple-600 hover:to-blue-600 transition flex items-center gap-1">
-        <span>🤖</span> AI深度解读
-      </button>
-    </div>
-  </div>`;
-
-  container.innerHTML = aiBtn + localHtml;
+  // Always render local rule-based analysis — works everywhere, no API needed
+  container.innerHTML = buildLocalAnalysisHTML(rep, ov);
 }
 
 function buildLocalAnalysisHTML(rep, ov) {
@@ -940,7 +889,8 @@ function buildLocalAnalysisHTML(rep, ov) {
   return html;
 }
 
-async function generateAIReport() {
+// generateAIReport removed — AI analysis now uses buildLocalAnalysisHTML directly
+function _deprecated_generateAIReport() {
   const container = document.getElementById('aiReportContent');
   const rep = getReport();
   const ov = computeOverall(rep);
