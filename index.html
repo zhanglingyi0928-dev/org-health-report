@@ -53,7 +53,14 @@
     <div class="flex items-center gap-3">
       <div>
         <h1 class="text-xl font-bold tracking-tight">组织健康度季度报告</h1>
-        <p class="text-sm text-slate-500" id="teamName">奇暖项目组</p>
+        <div class="flex items-center gap-1.5 mt-0.5">
+          <span class="text-sm text-slate-500 cursor-pointer hover:text-blue-600 hover:underline decoration-dotted underline-offset-2 transition" id="teamNameDisplay" onclick="startEditTeamName()" title="点击编辑项目名称">奇暖项目组</span>
+          <svg onclick="startEditTeamName()" class="w-3.5 h-3.5 text-slate-300 hover:text-blue-500 cursor-pointer transition" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="编辑项目名称"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+          <input id="teamNameInput" class="hidden text-sm border border-blue-300 rounded-lg px-2 py-0.5 w-40 focus:outline-none focus:border-blue-500" value="奇暖项目组" onblur="saveTeamName()" onkeydown="if(event.key==='Enter')saveTeamName()">
+          <select id="projectPreset" onchange="switchProject()" class="text-xs border border-slate-200 rounded-lg py-0.5 px-2 text-slate-400 hover:border-slate-300 cursor-pointer bg-white">
+            <option value="">+ 切换项目模板</option>
+          </select>
+        </div>
       </div>
     </div>
     <div class="flex items-center gap-2">
@@ -375,6 +382,10 @@ function render() {
   const ov = computeOverall(rep);
   const d = getData();
 
+  // Update team name display
+  document.getElementById('teamNameDisplay').textContent = rep.team;
+  document.getElementById('teamNameInput').value = rep.team;
+
   // Populate quarter selector
   const sel = document.getElementById('quarterSelect');
   sel.innerHTML = Object.keys(d).sort().reverse().map(q =>
@@ -420,6 +431,7 @@ function render() {
   renderAllTodos(rep);
   updateBadge(rep);
   renderAI(rep, ov);
+  updateProjectPresets(rep.team);
 }
 
 function renderDims(rep, ov) {
@@ -1335,8 +1347,83 @@ function esc(s) { if (!s) return ''; return s.replace(/&/g,'&amp;').replace(/</g
 function escHtml(s) { return esc(s); }
 
 // ============================================================================
-// SEED + INIT
+// TEAM NAME / PROJECT MANAGEMENT
 // ============================================================================
+function startEditTeamName() {
+  document.getElementById('teamNameDisplay').classList.add('hidden');
+  document.getElementById('teamNameInput').classList.remove('hidden');
+  document.getElementById('teamNameInput').focus();
+  document.getElementById('teamNameInput').select();
+}
+
+function saveTeamName() {
+  var input = document.getElementById('teamNameInput');
+  var newName = input.value.trim();
+  if (!newName) {
+    input.value = document.getElementById('teamNameDisplay').textContent;
+    cancelEditTeamName();
+    return;
+  }
+  var d = getData();
+  var rep = d[currentQuarter];
+  rep.team = newName;
+  // Also update all quarters with same old name (if they match)
+  var oldTeam = document.getElementById('teamNameDisplay').textContent;
+  Object.keys(d).forEach(function(q) {
+    if (d[q].team === oldTeam) d[q].team = newName;
+  });
+  saveData(d);
+  cancelEditTeamName();
+  // Update preset dropdown
+  updateProjectPresets(newName);
+  // Update display and input
+  document.getElementById('teamNameDisplay').textContent = newName;
+  document.getElementById('teamNameInput').value = newName;
+  render();
+}
+
+function cancelEditTeamName() {
+  document.getElementById('teamNameDisplay').classList.remove('hidden');
+  document.getElementById('teamNameInput').classList.add('hidden');
+}
+
+function switchProject() {
+  var sel = document.getElementById('projectPreset');
+  var newName = sel.value;
+  if (!newName) return;
+  // Don't change if same as current
+  var currentTeam = document.getElementById('teamNameDisplay').textContent;
+  if (newName === currentTeam) return;
+
+  if (!confirm('切换到项目「' + newName + '」？\n当前项目的数据不会丢失，可以通过下拉菜单随时切回。')) return;
+
+  var d = getData();
+  var rep = d[currentQuarter];
+  rep.team = newName;
+  saveData(d);
+  document.getElementById('teamNameDisplay').textContent = newName;
+  document.getElementById('teamNameInput').value = newName;
+  sel.value = '';
+  render();
+}
+
+function updateProjectPresets(currentName) {
+  var d = getData();
+  var sel = document.getElementById('projectPreset');
+  // Collect all unique team names from all quarters
+  var teams = {};
+  Object.keys(d).forEach(function(q) {
+    var t = d[q].team;
+    if (t && t !== currentName) teams[t] = true;
+  });
+  var teamList = Object.keys(teams).sort();
+  // Build options: "切换到XX" for each
+  var html = '<option value="">+ 切换项目模板</option>';
+  teamList.forEach(function(t) {
+    html += '<option value="' + esc(t) + '">' + esc(t) + '</option>';
+  });
+  sel.innerHTML = html;
+}
 function seed() {
   const d = getData();
   if (!d['2026-Q1']) {
