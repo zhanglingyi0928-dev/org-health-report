@@ -858,24 +858,107 @@ function renderAI(rep, ov) {
   const container = document.getElementById('aiReportContent');
   const has = ov.graded > 0;
   if (!has) {
-    container.innerHTML = `<div class="p-10 text-center text-slate-400"><div class="text-3xl mb-2">🤖</div><p class="font-medium">请先录入指标数据</p><p class="text-sm mt-1">录入数据后将可生成 AI 报告解读</p></div>`;
+    container.innerHTML = `<div class="p-10 text-center text-slate-400"><div class="text-3xl mb-2">🤖</div><p class="font-medium">请先录入指标数据</p><p class="text-sm mt-1">录入数据后将自动生成报告解读</p></div>`;
     return;
   }
-  container.innerHTML = `<div class="p-10 text-center">
-    <div class="text-3xl mb-3">🤖</div>
-    <p class="text-sm text-slate-500 mb-4">点击下方按钮，AI将基于指标数据生成分析报告</p>
-    <button onclick="generateAIReport()" class="bg-blue-500 text-white px-6 py-2.5 rounded-xl text-sm font-medium hover:bg-blue-600 transition">🔄 生成 AI 报告解读</button>
-    <p class="text-xs text-slate-400 mt-2">基于实际数据 + 组织健康度评估Skill</p>
+  // Default: always render local rule-based analysis (works everywhere, no API needed)
+  var localHtml = buildLocalAnalysisHTML(rep, ov);
+
+  // Add AI deep analysis button at top (only if API may be available)
+  var aiBtn = `<div class="mb-4 p-3 bg-gradient-to-r from-purple-50 to-blue-50 rounded-xl border border-purple-100">
+    <div class="flex items-center justify-between">
+      <div>
+        <div class="text-sm font-semibold text-slate-700">📊 本地规则分析 <span class="text-xs font-normal text-slate-400">（离线可用）</span></div>
+        <div class="text-xs text-slate-400 mt-0.5">基于预设评估规则自动生成，无需网络</div>
+      </div>
+      <button onclick="generateAIReport()" class="bg-gradient-to-r from-purple-500 to-blue-500 text-white px-4 py-2 rounded-xl text-xs font-medium hover:from-purple-600 hover:to-blue-600 transition flex items-center gap-1">
+        <span>🤖</span> AI深度解读
+      </button>
+    </div>
   </div>`;
+
+  container.innerHTML = aiBtn + localHtml;
+}
+
+function buildLocalAnalysisHTML(rep, ov) {
+  var score = Math.round(ov.score);
+  var html = '<div class="mb-4"><h2 class="text-lg font-bold mb-1">📊 综合评估 · ' + score + ' 分</h2></div>';
+
+  // Cross-dimensional insights
+  var crossInsights = genCrossInsightsV2(rep);
+  if (crossInsights.length > 0) {
+    html += '<div class="rounded-xl p-4 mb-3" style="background:#fffbeb;border:1px solid #fde68a">';
+    html += '<h3 class="font-bold text-sm text-amber-800 mb-2">🔗 跨指标洞察</h3>';
+    crossInsights.forEach(function(ins) {
+      html += '<div class="bg-amber-50 rounded-lg p-3 mb-2"><div class="text-xs font-semibold text-amber-800 mb-1">' + esc(ins.title) + '</div>';
+      html += '<div class="text-sm leading-relaxed" style="color:#78350f">' + esc(ins.insight) + '</div></div>';
+    });
+    html += '</div>';
+  }
+
+  DIM_ORDER.forEach(function(dim) {
+    if (DIM_WEIGHTS[dim]===0) return;
+    var metrics = rep.dimensions[dim].metrics.filter(function(m){ return m.grade; });
+    if (metrics.length===0) return;
+
+    var dimScore = ov.dimScores[dim];
+    var dimBg = dim==='组织结构'?'#fef3c7':dim==='人才密度'?'#f0fdf4':dim==='组织稳定性'?'#fef2f2':'#f1f5f9';
+    var dimBd = dim==='组织结构'?'#fde68a':dim==='人才密度'?'#bbf7d0':dim==='组织稳定性'?'#fecaca':'#cbd5e1';
+
+    html += '<div class="rounded-xl p-4 mb-3" style="background:'+dimBg+';border:1px solid '+dimBd+'">';
+    html += '<h3 class="font-semibold text-sm mb-3">' + DIM_ICON[dim] + ' ' + dim + ' <span class="text-xs font-normal text-slate-500">(' + dimScore.graded + '/' + dimScore.total + '项已评)</span></h3>';
+    metrics.forEach(function(m) {
+      var r = buildReasoning(m);
+      var bgClr = m.grade==='危险'?'#fef2f2':m.grade==='警示'?'#fff7ed':m.grade==='正常'?'#fffbeb':'#f0fdf4';
+      var bdClr = m.grade==='危险'?'#fecaca':m.grade==='警示'?'#fed7aa':m.grade==='正常'?'#fde68a':'#bbf7d0';
+      html += '<div class="rounded-lg p-3 mb-1.5 text-sm" style="background:'+bgClr+';border:1px solid '+bdClr+'">';
+      html += '<span class="text-xs font-semibold grade-'+m.grade+' px-2 py-0.5 rounded-full">'+m.grade+'</span>';
+      html += '<span class="ml-1">'+m.name+': <strong>'+(m.currentValue||'--')+'</strong></span>';
+      if (m.judgment) html += '<span class="ml-2 text-xs">判断：'+m.judgment+'</span>';
+      html += '<div class="text-xs text-slate-500 mt-1">'+r.logic+'</div>';
+      if (r.risk) html += '<div class="text-xs text-red-600 mt-0.5">⚠ '+esc(r.risk)+'</div>';
+      if (r.suggestion) html += '<div class="text-xs text-blue-600 mt-0.5">💡 '+esc(r.suggestion)+'</div>';
+      if (m.hrNote) html += '<div class="text-xs text-purple-600 mt-0.5">💬 '+esc(m.hrNote)+'</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+
+  html += '<div class="p-3 bg-slate-50 rounded-xl text-xs text-slate-400">📌 以上为本地规则分析。随着季度数据持续沉淀，可进行趋势对比。建议结合管理者访谈交叉验证。</div>';
+  return html;
 }
 
 async function generateAIReport() {
   const container = document.getElementById('aiReportContent');
-  container.innerHTML = `<div class="p-10 text-center"><div class="text-3xl mb-2">⏳</div><p class="text-sm text-slate-500">AI 正在分析中...</p></div>`;
-
   const rep = getReport();
   const ov = computeOverall(rep);
 
+  container.innerHTML = `<div class="p-10 text-center"><div class="text-3xl mb-2">⏳</div><p class="text-sm text-slate-500">AI 正在分析中，请稍候...</p><p class="text-xs text-slate-400 mt-1">若长时间无响应，将自动切换为本地规则分析</p></div>`;
+
+  // Check if API is reachable (only works in WorkBuddy local environment)
+  var canUseAPI = false;
+  try {
+    var ctrl = new AbortController();
+    var timeout = setTimeout(function(){ ctrl.abort(); }, 3000);
+    var resp = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'deepseek-v4-pro', messages: [{role:'user',content:'ping'}], max_tokens: 1 }),
+      signal: ctrl.signal
+    });
+    clearTimeout(timeout);
+    canUseAPI = resp.ok || resp.status === 400;  // 400 means API is there but bad request
+  } catch(e) {
+    canUseAPI = false;
+  }
+
+  if (!canUseAPI) {
+    // Fallback to local analysis
+    container.innerHTML = '<div class="mb-4 p-3 bg-amber-50 rounded-xl text-xs text-amber-700"><strong>ℹ️ 当前环境无AI接口</strong> · 已自动切换为本地规则分析（离线可用）</div>' + buildLocalAnalysisHTML(rep, ov);
+    return;
+  }
+
+  // Real API call
   var dataText = '【' + rep.team + ' · ' + rep.quarter + ' · 数据截止' + (rep.cutoff||'待填') + '】\n';
   DIM_ORDER.forEach(function(dim) {
     rep.dimensions[dim].metrics.forEach(function(m) {
@@ -1042,37 +1125,10 @@ async function generateAIReport() {
     container.innerHTML = html;
   } catch (e) {
     console.error('AI generation failed:', e);
-    renderAIFallback(rep, ov);
+    var rep2 = getReport();
+    var ov2 = computeOverall(rep2);
+    document.getElementById('aiReportContent').innerHTML = '<div class="mb-4 p-3 bg-amber-50 rounded-xl text-xs text-amber-700"><strong>⚠️ AI 接口超时或异常</strong> · 已自动切换为本地规则分析</div>' + buildLocalAnalysisHTML(rep2, ov2);
   }
-}
-
-function renderAIFallback(rep, ov) {
-  var container = document.getElementById('aiReportContent');
-  var score = Math.round(ov.score);
-  var html = '<div class="mb-4 p-3 bg-yellow-50 rounded-xl text-xs text-yellow-700"><strong>⚠️ AI 接口暂不可用</strong> · 以下为本地规则分析</div>';
-  html += '<div class="mb-4"><h2 class="text-lg font-bold mb-1">📊 综合评估 · ' + score + ' 分</h2></div>';
-
-  DIM_ORDER.forEach(function(dim) {
-    if (DIM_WEIGHTS[dim]===0) return;
-    var metrics = rep.dimensions[dim].metrics.filter(function(m){ return m.grade; });
-    if (metrics.length===0) return;
-    html += '<div class="mb-4"><h3 class="font-semibold text-sm mb-2">' + DIM_ICON[dim] + ' ' + dim + '</h3>';
-    metrics.forEach(function(m) {
-      var r = buildReasoning(m);
-      var bgClr = m.grade==='危险'?'#fef2f2':m.grade==='警示'?'#fff7ed':m.grade==='正常'?'#fffbeb':'#f0fdf4';
-      var bdClr = m.grade==='危险'?'#fecaca':m.grade==='警示'?'#fed7aa':m.grade==='正常'?'#fde68a':'#bbf7d0';
-      html += '<div class="rounded-lg p-3 mb-1.5 text-sm" style="background:'+bgClr+';border:1px solid '+bdClr+'">';
-      html += '<span class="text-xs font-semibold grade-'+m.grade+' px-2 py-0.5 rounded-full">'+m.grade+'</span>';
-      html += '<span class="ml-1">'+m.name+': <strong>'+(m.currentValue||'--')+'</strong></span>';
-      if (m.judgment) html += '<span class="ml-2 text-xs">判断：'+m.judgment+'</span>';
-      html += '<div class="text-xs text-slate-500 mt-1">'+r.logic+'</div>';
-      if (m.hrNote) html += '<div class="text-xs text-blue-600 mt-0.5">💬 '+esc(m.hrNote)+'</div>';
-      html += '</div>';
-    });
-    html += '</div>';
-  });
-
-  container.innerHTML = html;
 }
 
 function buildReasoning(m) {
