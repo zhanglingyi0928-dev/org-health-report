@@ -317,16 +317,15 @@ function importData() {
 }
 
 function resetData() {
-  if (!confirm('⚠️ 确定要重置所有数据吗？\n\n这将清空所有季度报告、指标数据、待跟进事项和AI分析结果，恢复为空白模板。\n\n此操作不可恢复！')) return;
+  if (!confirm('⚠️ 确定要重置所有数据吗？\n\n这将清空所有季度报告、指标数据、待跟进事项和已录入内容，并恢复为空白模板。\n\n此操作不可恢复！')) return;
   if (!confirm('再次确认：真的要清空所有数据吗？')) return;
   localStorage.removeItem(STORAGE_KEY);
   currentQuarter = null;
-  seed();
-  currentQuarter = '2026-Q1';
+  // 直接走 makeDefault：不调用 seed()，确保是空白模板
   render();
-  document.getElementById('toolbarStatus').textContent = '已重置';
+  document.getElementById('toolbarStatus').textContent = '已重置为空白模板';
   document.getElementById('toolbarStatus').style.color = '#f97316';
-  setTimeout(() => { document.getElementById('toolbarStatus').textContent = ''; }, 2000);
+  setTimeout(() => { document.getElementById('toolbarStatus').textContent = ''; }, 2500);
 }
 
 function restoreSeedData() {
