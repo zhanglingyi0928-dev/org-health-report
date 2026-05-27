@@ -93,8 +93,17 @@
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h18v16H3V4z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h10M7 16h6"/></svg>
         恢复示例
       </button>
+      <button onclick="downloadCSVTemplate()" class="text-xs text-slate-600 bg-white border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 hover:border-slate-300 transition flex items-center gap-1" title="下载CSV导入模板（推荐使用该模板导出/修改再上传）">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v12m0 0l-4-4m4 4l4-4"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 21h14"/></svg>
+        模板
+      </button>
+      <button onclick="uploadCSVData()" class="text-xs text-blue-600 bg-white border border-blue-200 px-3 py-1.5 rounded-lg hover:bg-blue-50 hover:border-blue-300 transition flex items-center gap-1" title="上传CSV数据：自动匹配核心指标并填充当前季度">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5 5 5"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15V3"/></svg>
+        上传CSV
+      </button>
     </div>
     <div class="text-xs text-slate-400" id="toolbarStatus"></div>
+    <input id="csvFileInput" class="hidden" type="file" accept=".csv,text/csv" onchange="handleCSVFile(this)" />
   </div>
 
   <!-- Meta bar -->
@@ -338,6 +347,205 @@ function restoreSeedData() {
   document.getElementById('toolbarStatus').textContent = '已恢复示例数据';
   document.getElementById('toolbarStatus').style.color = '#f59e0b';
   setTimeout(() => { document.getElementById('toolbarStatus').textContent = ''; }, 2500);
+}
+
+function csvEscape(v) {
+  if (v === null || v === undefined) v = '';
+  v = String(v);
+  if (v.includes('"') || v.includes(',') || v.includes('\n') || v.includes('\r')) {
+    return '"' + v.replace(/"/g, '""') + '"';
+  }
+  return v;
+}
+
+function downloadCSVTemplate() {
+  const quarter = currentQuarter || '2026-Q1';
+  const data = getData();
+  const team = (data[quarter] && data[quarter].team) ? data[quarter].team : document.getElementById('teamNameDisplay').textContent || '团队';
+
+  const header = ['quarter','team','metricKey','currentValue','grade','judgment','note','hrNote','todosText'];
+  let lines = [header.join(',')];
+
+  DIM_ORDER.forEach(function(dim) {
+    DEFAULT_METRICS[dim].forEach(function(m) {
+      const row = [quarter, team, m.key, '', '', '', '', '', ''];
+      lines.push(row.map(csvEscape).join(','));
+    });
+  });
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'org-health-metrics-template.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  document.getElementById('toolbarStatus').textContent = '已下载CSV模板';
+  document.getElementById('toolbarStatus').style.color = '#3b82f6';
+  setTimeout(() => { document.getElementById('toolbarStatus').textContent = ''; }, 2000);
+}
+
+function uploadCSVData() {
+  const input = document.getElementById('csvFileInput');
+  input.value = '';
+  input.click();
+}
+
+function handleCSVFile(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const text = e.target.result || '';
+      const rows = parseCSV(text);
+      if (!rows || rows.length < 2) throw new Error('CSV内容为空或格式不正确');
+
+      const header = rows[0].map(function(h){ return String(h||'').trim().toLowerCase(); });
+      const idx = {};
+      header.forEach(function(h, i){ idx[h] = i; });
+
+      function pick(obj, keys) {
+        for (let k of keys) { if (obj[k] !== undefined) return obj[k]; }
+        return '';
+      }
+
+      const requiredKey = header.includes('metrickey') || header.includes('metric_key') || header.includes('metrickey');
+      if (!requiredKey) {
+        // allow blank: just fail with clearer message
+        throw new Error('CSV缺少metricKey列。请下载页面的CSV模板并修改后上传。');
+      }
+
+      // normalize keys
+      const get = function(row, names) {
+        for (let n of names) {
+          if (idx[n] !== undefined) return row[idx[n]];
+        }
+        return '';
+      };
+
+      const d = getData();
+      let usedQuarters = {};
+
+      // Build metric key -> dim/index
+      const metricMap = {};
+      DIM_ORDER.forEach(function(dim) {
+        DEFAULT_METRICS[dim].forEach(function(m, i) {
+          metricMap[m.key] = { dim: dim, mi: i };
+        });
+      });
+
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        if (!row || row.length === 0) continue;
+
+        const quarter = get(row, ['quarter']) || currentQuarter || '2026-Q1';
+        const team = get(row, ['team']) || (d[quarter] && d[quarter].team) || '奇暖项目组';
+        const metricKey = get(row, ['metrickey','metric_key','metrkey','metrkey','metric']);
+
+        if (!metricKey) continue;
+        const mapHit = metricMap[metricKey];
+        if (!mapHit) {
+          // unknown metricKey: skip
+          continue;
+        }
+
+        if (!d[quarter]) d[quarter] = makeDefault(quarter);
+        d[quarter].team = team;
+
+        const m = d[quarter].dimensions[mapHit.dim].metrics[mapHit.mi];
+
+        const currentValue = get(row, ['currentvalue','current_value']);
+        const grade = get(row, ['grade']);
+        const judgment = get(row, ['judgment','judge','判断']);
+        const note = get(row, ['note','notes']);
+        const hrNote = get(row, ['hrnote','hr_note','hrbp补充','hrbp']);
+        const todosText = get(row, ['tostext','todolist','todostext','todostext','todostext']);
+        const todosRaw = get(row, ['todostext','todosText','todostext','todo','todos']);
+
+        // Update fields if columns exist and values are non-empty
+        if (currentValue !== undefined && String(currentValue).trim() !== '') m.currentValue = String(currentValue).trim();
+        if (grade !== undefined && String(grade).trim() !== '') m.grade = String(grade).trim();
+        if (judgment !== undefined && String(judgment).trim() !== '') m.judgment = String(judgment).trim();
+        if (note !== undefined && String(note).trim() !== '') m.note = String(note).trim();
+        if (hrNote !== undefined && String(hrNote).trim() !== '') m.hrNote = String(hrNote).trim();
+
+        // todos
+        const todosStr = todosRaw !== undefined ? String(todosRaw) : '';
+        if (todosStr && todosStr.trim()) {
+          const parts = todosStr
+            .split(/\r?\n|;|；/)
+            .map(function(s){ return String(s).trim(); })
+            .filter(Boolean);
+          m.todos = parts.map(function(p){ return { text: p, status: 'open', createdAt: new Date().toISOString() }; });
+        }
+
+        usedQuarters[quarter] = true;
+      }
+
+      const quarters = Object.keys(usedQuarters);
+      if (quarters.length > 0) currentQuarter = quarters.sort().reverse()[0];
+      saveData(d);
+      render();
+
+      document.getElementById('toolbarStatus').textContent = 'CSV导入完成';
+      document.getElementById('toolbarStatus').style.color = '#10b981';
+      setTimeout(() => { document.getElementById('toolbarStatus').textContent = ''; }, 2500);
+    } catch (err) {
+      alert('CSV导入失败：' + err.message);
+      document.getElementById('toolbarStatus').textContent = '导入失败';
+      document.getElementById('toolbarStatus').style.color = '#ef4444';
+      setTimeout(() => { document.getElementById('toolbarStatus').textContent = ''; }, 2500);
+    }
+  };
+  reader.readAsText(file, 'utf-8');
+}
+
+function parseCSV(text) {
+  text = String(text || '');
+  let rows = [];
+  let row = [];
+  let cell = '';
+  let inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (i + 1 < text.length && text[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          inQ = false;
+        }
+      } else {
+        cell += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQ = true;
+      } else if (ch === ',') {
+        row.push(cell);
+        cell = '';
+      } else if (ch === '\r') {
+        // ignore
+      } else if (ch === '\n') {
+        row.push(cell);
+        cell = '';
+        // push row if any content
+        if (row.some(c => String(c).trim() !== '')) rows.push(row);
+        row = [];
+      } else {
+        cell += ch;
+      }
+    }
+  }
+  // last cell
+  row.push(cell);
+  if (row.some(c => String(c).trim() !== '')) rows.push(row);
+  return rows;
 }
 
 function makeDefault(quarter) {
@@ -857,7 +1065,228 @@ function renderAI(rep, ov) {
     return;
   }
   // Always render local rule-based analysis — works everywhere, no API needed
-  container.innerHTML = buildLocalAnalysisHTML(rep, ov);
+  container.innerHTML = buildProfessionalDynamicHTML(rep, ov);
+}
+
+function buildProfessionalDynamicHTML(rep, ov) {
+  // 基于核心指标（grade/judgment/currentValue/note/hrNote/todos）动态生成更专业的“解读文本”
+  // GitHub Pages 无法直接调用 WorkBuddy 内部 AI 接口，因此这里实现的是：高质量规则叙事（离线可用），但文本随数据变化。
+
+  const hasAny = ov.graded > 0;
+  if (!hasAny) {
+    return '<div class="p-10 text-center text-slate-400"><div class="text-3xl mb-2">🤖</div><p class="font-medium">请先录入指标数据</p><p class="text-sm mt-1">录入后将自动生成动态解读</p></div>';
+  }
+
+  function priorityFor(m) {
+    if (m.grade === '危险' || m.judgment === '需改进') return 'P0';
+    if (m.grade === '警示' || m.judgment === '需深挖') return 'P1';
+    return 'P2';
+  }
+
+  function reasonFor(m, r) {
+    if (m.judgment === '需改进') return r.risk ? ('风险指向：' + r.risk) : (m.note ? ('数据指向：' + m.note) : '在评级标准下触发需改进信号');
+    if (m.judgment === '需深挖') return r.risk ? ('潜在风险：' + r.risk) : (m.note ? ('数据解读：' + m.note) : '在评级标准下触发需深挖信号');
+    if (r.risk) return r.risk;
+    return '暂无额外风险信息';
+  }
+
+  // Collect metrics
+  const metricList = [];
+  DIM_ORDER.forEach(function(dim) {
+    rep.dimensions[dim].metrics.forEach(function(m) {
+      const has = (m.grade || m.judgment || m.currentValue || (m.note && m.note.trim()) || (m.hrNote && m.hrNote.trim()) || (m.todos && m.todos.length));
+      if (!has) return;
+      metricList.push({ dim: dim, m: m, priority: priorityFor(m) });
+    });
+  });
+
+  const concerned = metricList.filter(x => x.priority === 'P0' || x.priority === 'P1');
+  const positives = metricList.filter(x => x.priority === 'P2');
+
+  // Todos summary
+  const allTodos = [];
+  DIM_ORDER.forEach(function(dim) {
+    rep.dimensions[dim].metrics.forEach(function(m) {
+      (m.todos || []).forEach(function(t, ti) {
+        if (!t || !t.text) return;
+        allTodos.push({ dim: dim, metric: m, todo: t, priority: priorityFor(m) });
+      });
+    });
+  });
+  const openTodos = allTodos.filter(x => x.todo.status === 'open');
+  const doneTodos = allTodos.filter(x => x.todo.status === 'done');
+
+  // Core problem table
+  let html = '';
+  html += '<div class="p-4 bg-blue-50 rounded-xl mb-4" style="border:1px solid #bfdbfe">';
+  html += '<div class="flex items-center justify-between gap-3">';
+  html += '<div>';
+  html += '<div class="text-sm text-slate-600">📌 组织健康度动态解读</div>';
+  html += '<div class="text-lg font-bold text-slate-800 mt-1">' + rep.team + ' · ' + rep.quarter + ' · 综合评分 ' + Math.round(ov.score) + ' 分</div>';
+  html += '<div class="text-xs text-slate-500 mt-1">本解读基于核心指标录入字段生成（离线规则叙事），可用于管理者讨论与待跟进闭环</div>';
+  html += '</div>';
+  html += '<div class="text-right">';
+  html += '<div class="text-xs text-slate-500">正常关注：' + document.getElementById('countNormal')?.textContent + '</div>';
+  html += '<div class="text-xs text-slate-500">需深挖：' + document.getElementById('countDig')?.textContent + '</div>';
+  html += '<div class="text-xs text-slate-500">需改进：' + document.getElementById('countFix')?.textContent + '</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // 1. 核心结论摘要
+  html += '<div class="mb-4">';
+  html += '<h3 class="text-sm font-semibold text-slate-700 mb-2">## 一、核心结论摘要</h3>';
+
+  // 1.1 最需关注问题
+  html += '<div class="rounded-xl p-4 mb-3" style="background:#fffbeb;border:1px solid #fde68a">';
+  html += '<div class="text-xs font-semibold text-amber-800 mb-2">### 1.1 最需关注的问题</div>';
+  if (concerned.length === 0) {
+    html += '<div class="text-sm text-slate-600">暂无P0/P1信号（建议仍结合访谈验证关键假设）。</div>';
+  } else {
+    html += '<div class="overflow-x-auto">';
+    html += '<table class="w-full text-xs border-collapse">';
+    html += '<thead><tr>' +
+      '<th style="border-bottom:1px solid #fde68a;text-align:left;padding:6px">P级</th>' +
+      '<th style="border-bottom:1px solid #fde68a;text-align:left;padding:6px">问题</th>' +
+      '<th style="border-bottom:1px solid #fde68a;text-align:left;padding:6px">可能原因/信号</th>' +
+      '<th style="border-bottom:1px solid #fde68a;text-align:left;padding:6px">风险等级</th>' +
+    '</tr></thead><tbody>';
+    concerned.slice(0, 8).forEach(function(x) {
+      const r = buildReasoning(x.m);
+      const pr = x.priority;
+      const risk = pr === 'P0' ? '高' : '中';
+      html += '<tr>' +
+        '<td style="padding:6px;font-weight:700;color:' + (pr==='P0'?'#dc2626':'#f97316') + '">' + pr + '</td>' +
+        '<td style="padding:6px">' + escHtml(x.m.name) + '</td>' +
+        '<td style="padding:6px;color:#78350f">' + escHtml(reasonFor(x.m, r).slice(0, 120)) + '</td>' +
+        '<td style="padding:6px">' + risk + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  // 1.2 当前积极信号
+  html += '<div class="rounded-xl p-4 mb-3" style="background:#f0fdf4;border:1px solid #bbf7d0">';
+  html += '<div class="text-xs font-semibold text-green-800 mb-2">### 1.2 当前积极信号</div>';
+  const posMetrics = positives.filter(x => x.m.grade).slice(0, 6);
+  if (posMetrics.length === 0) {
+    html += '<div class="text-sm text-slate-600">暂无明确正向评级信号。</div>';
+  } else {
+    html += '<ul class="text-sm text-slate-700" style="margin:0;padding-left:18px">';
+    posMetrics.forEach(function(x){
+      html += '<li style="margin:4px 0">' + escHtml(x.m.name) + '：' + (x.m.judgment || x.m.grade) + '（值：' + (x.m.currentValue || '--') + '）</li>';
+    });
+    html += '</ul>';
+  }
+  html += '</div>';
+
+  // 1.3 优先级待办
+  html += '<div class="rounded-xl p-4" style="background:#eff6ff;border:1px solid #bfdbfe">';
+  html += '<div class="text-xs font-semibold text-blue-800 mb-2">### 1.3 优先级待办（依据P级信号汇总）</div>';
+  ['P0','P1','P2'].forEach(function(p){
+    const list = openTodos.filter(x => x.priority === p);
+    html += '<div class="mb-2">';
+    html += '<div class="text-xs font-semibold" style="color:' + (p==='P0'?'#dc2626':p==='P1'?'#f97316':'#2563eb') + '">- ' + p + '</div>';
+    if (list.length === 0) {
+      html += '<div class="text-sm text-slate-600">暂无开放待办</div>';
+    } else {
+      html += '<ul style="margin:0;padding-left:18px">';
+      list.slice(0, 6).forEach(function(x){
+        html += '<li style="margin:4px 0">' + escHtml(x.todo.text).slice(0, 90) + '（' + escHtml(x.metric.name) + '）</li>';
+      });
+      html += '</ul>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+
+  html += '</div>'; // end summary
+
+  // 2. 分维度详细分析（可读性优先）
+  DIM_ORDER.forEach(function(dim){
+    if (DIM_WEIGHTS[dim] === 0) return;
+    const metrics = rep.dimensions[dim].metrics.filter(function(m){ return m.grade || m.judgment || (m.note && m.note.trim()) || (m.todos && m.todos.length); });
+    if (metrics.length === 0) return;
+
+    html += '<div class="rounded-xl p-4 mb-3" style="background:#f8fafc;border:1px solid #e2e8f0">';
+    html += '<h3 class="text-sm font-semibold text-slate-800 mb-3">### ' + DIM_ICON[dim] + ' ' + dim + '</h3>';
+
+    metrics.forEach(function(m){
+      const r = buildReasoning(m);
+      const pr = priorityFor(m);
+      html += '<div class="rounded-lg p-3 mb-2" style="background:#ffffff;border:1px solid #e5e7eb">';
+      html += '<div class="text-xs font-semibold" style="color:' + (pr==='P0'?'#dc2626':pr==='P1'?'#f97316':'#2563eb') + '">' + pr + ' · ' + escHtml(m.name) + '</div>';
+      html += '<div class="text-xs text-slate-500 mt-1">值：' + escHtml(m.currentValue || '--') + ' · 评级：' + escHtml(m.grade || '--') + ' · 判断：' + escHtml(m.judgment || '--') + '</div>';
+      html += '<div class="text-sm text-slate-700 mt-2">';
+      html += '<div><strong>数据解读：</strong>' + escHtml((m.note || '').trim() ? m.note : r.logic) + '</div>';
+      if (r.risk) html += '<div class="mt-1"><strong>可能原因/风险：</strong>' + escHtml(r.risk) + '</div>';
+      if (r.suggestion) html += '<div class="mt-1"><strong>建议动作：</strong>' + escHtml(r.suggestion) + '</div>';
+      if (m.hrNote) html += '<div class="mt-1"><strong>HRBP补充：</strong>' + escHtml(m.hrNote) + '</div>';
+      html += '</div>';
+
+      // Open todo preview
+      const open = (m.todos||[]).filter(t => t.status === 'open');
+      if (open.length > 0) {
+        html += '<div class="mt-2 text-xs text-slate-600"><strong>待跟进：</strong>' + escHtml(open[0].text).slice(0, 120) + (open.length>1?('等'+open.length+'项'): '') + '</div>';
+      }
+
+      html += '</div>';
+    });
+
+    html += '</div>';
+  });
+
+  // 3. 跨指标综合洞察
+  const crossInsights = genCrossInsightsV2(rep);
+  if (crossInsights && crossInsights.length > 0) {
+    html += '<div class="rounded-xl p-4 mb-3" style="background:#fffbeb;border:1px solid #fde68a">';
+    html += '<h3 class="text-sm font-semibold text-amber-900 mb-2">### 🔗 跨指标综合洞察</h3>';
+    crossInsights.slice(0, 5).forEach(function(ins){
+      html += '<div class="mb-2">';
+      html += '<div class="text-xs font-semibold text-amber-800">' + escHtml(ins.title) + '</div>';
+      html += '<div class="text-sm text-amber-900/80">' + escHtml(ins.insight) + '</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  // 4. 行动清单（P0/P1/P2）
+  const pGroups = {P0:[],P1:[],P2:[]};
+  concerned.forEach(function(x){
+    const r = buildReasoning(x.m);
+    const text = r.suggestion ? r.suggestion : (x.m.note || x.m.name);
+    pGroups[x.priority].push({ metric: x.m.name, text: text, grade: x.m.grade, judgment: x.m.judgment });
+  });
+  if (pGroups.P2.length === 0) {
+    // add a few positive actions
+    positives.slice(0, 2).forEach(function(x){
+      pGroups.P2.push({ metric: x.m.name, text: '保持跟踪：验证关键假设与趋势变化', grade: x.m.grade, judgment: x.m.judgment });
+    });
+  }
+
+  html += '<div class="rounded-xl p-4 mb-3" style="background:#fef2f2;border:1px solid #fecaca">';
+  html += '<h3 class="text-sm font-semibold text-red-800 mb-2">### ✅ 行动清单（按优先级）</h3>';
+  ['P0','P1','P2'].forEach(function(p){
+    html += '<div class="mb-2">';
+    html += '<div class="text-xs font-semibold" style="color:' + (p==='P0'?'#dc2626':p==='P1'?'#f97316':'#2563eb') + '">' + p + '</div>';
+    const list = pGroups[p];
+    if (!list || list.length===0) {
+      html += '<div class="text-sm text-slate-600">暂无</div>';
+    } else {
+      html += '<ul style="margin:0;padding-left:18px">';
+      list.slice(0, 6).forEach(function(it){
+        html += '<li style="margin:4px 0">' + escHtml(it.metric) + '：' + escHtml(it.text).slice(0, 110) + '</li>';
+      });
+      html += '</ul>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+
+  html += '<div class="p-3 bg-slate-50 rounded-xl text-xs text-slate-400">📎 附录：解读严格引用录入字段（currentValue/grade/judgment/note/hrNote/todos），并结合固定风险模板生成建议动作。</div>';
+
+  return html;
 }
 
 function buildLocalAnalysisHTML(rep, ov) {
